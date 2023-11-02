@@ -10,22 +10,28 @@ import com.azure.core.util.CoreUtils;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
+import okhttp3.ConnectionPool;
 import okhttp3.ConnectionSpec;
 import okhttp3.OkHttpClient;
 import okhttp3.TlsVersion;
 import reactor.netty.http.Http11SslContextSpec;
+import reactor.netty.resources.ConnectionProvider;
 
+import javax.net.ssl.SSLException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
 import java.net.InetSocketAddress;
 import java.util.Collections;
+import java.util.concurrent.TimeUnit;
 
 public class Tls13 {
     private static final String CONNECTION_STRING = Configuration.getGlobalConfiguration()
         .get("STORAGE_CONNECTION_STRING");
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws SSLException {
         // Print out the JVM version.
         // Throw an exception if it doesn't match what should be affected by the issue.
         printAndValidateJavaVersion();
@@ -52,10 +58,8 @@ public class Tls13 {
             httpClient = configureNettyHttpClient(enableFiddler);
         }
 
-        BlobServiceClient serviceClient = new BlobServiceClientBuilder()
-            .httpClient(httpClient)
-            .connectionString(CONNECTION_STRING)
-            .buildClient();
+        BlobServiceClient serviceClient = new BlobServiceClientBuilder().httpClient(httpClient)
+            .connectionString(CONNECTION_STRING).buildClient();
 
         // The issue is related to threads being blocked when connections are closed.
         // To test this send a lot of requests to the server changing the container and blob often.
@@ -78,13 +82,16 @@ public class Tls13 {
         }
     }
 
-    private static HttpClient configureNettyHttpClient(boolean enableFiddler) {
+    private static HttpClient configureNettyHttpClient(boolean enableFiddler) throws SSLException {
         // Configure Reactor Netty to only use TLS v1.3.
-        Http11SslContextSpec http11SslContextSpec = Http11SslContextSpec.forClient()
-            .configure(sslContextBuilder -> sslContextBuilder.protocols("TLSv1.3"));
+        SslContext sslContext = SslContextBuilder.forClient().protocols("TLSv1.3").build();
 
-        NettyAsyncHttpClientBuilder builder = new NettyAsyncHttpClientBuilder(reactor.netty.http.client.HttpClient.create()
-            .secure(spec -> spec.sslContext(http11SslContextSpec)));
+        // Disable connection pooling to ensure that each request uses a new connection.
+        ConnectionProvider connectionProvider = ConnectionProvider.newConnection();
+
+        NettyAsyncHttpClientBuilder builder = new NettyAsyncHttpClientBuilder(
+            reactor.netty.http.client.HttpClient.create(connectionProvider)
+                .secure(spec -> spec.sslContext(sslContext)));
 
         if (enableFiddler) {
             builder.proxy(new ProxyOptions(ProxyOptions.Type.HTTP, new InetSocketAddress("localhost", 8888)));
@@ -96,12 +103,15 @@ public class Tls13 {
     private static HttpClient configureOkHttpClient(boolean enableFiddler) {
         // Configure OkHttp to only use TLS v1.3.
         ConnectionSpec connectionSpec = new ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
-            .tlsVersions(TlsVersion.TLS_1_3)
-            .build();
+            .tlsVersions(TlsVersion.TLS_1_3).build();
 
-        OkHttpAsyncHttpClientBuilder builder = new OkHttpAsyncHttpClientBuilder(new OkHttpClient.Builder()
-            .connectionSpecs(Collections.singletonList(connectionSpec))
-            .build());
+        // Disable connection pooling to ensure that each request uses a new connection.
+        ConnectionPool connectionPool = new ConnectionPool(0, 0, TimeUnit.SECONDS);
+
+        OkHttpAsyncHttpClientBuilder builder = new OkHttpAsyncHttpClientBuilder(
+            new OkHttpClient.Builder().connectionSpecs(Collections.singletonList(connectionSpec))
+                .connectionPool(connectionPool)
+                .build());
 
         if (enableFiddler) {
             builder.proxy(new ProxyOptions(ProxyOptions.Type.HTTP, new InetSocketAddress("localhost", 8888)));
@@ -111,15 +121,22 @@ public class Tls13 {
     }
 
     private static void sendRequests(BlobServiceClient serviceClient) {
-        for (int i = 0; i < 100; i++) {
-            BlobContainerClient containerClient = serviceClient.createBlobContainer("container" + i);
+        try {
+            serviceClient.listBlobContainers().forEach(containerItem ->
+                serviceClient.deleteBlobContainerIfExists(containerItem.getName()));
 
-            for (int j = 0; j < 100; j++) {
-                containerClient.getBlobClient("blob" + j).getPageBlobClient()
-                    .create(4096);
+            for (int i = 0; i < 10; i++) {
+                BlobContainerClient containerClient = serviceClient.createBlobContainer("container" + i);
+
+                for (int j = 0; j < 100; j++) {
+                    containerClient.getBlobClient("blob" + j).getPageBlobClient().create(4096);
+                }
+
+                containerClient.delete();
             }
-
-            containerClient.delete();
+        } catch (Exception ex) {
+            System.out.println("Got an exception: " + ex.getMessage());
+            System.out.println("Continuing execution to check for blocked threads.");
         }
     }
 
