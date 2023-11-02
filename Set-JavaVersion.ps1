@@ -24,7 +24,8 @@ if ("" -eq $JdkPath) {
     # Use the HKEY_LOCAL_MACHINE registry keys to find JDK installs from Azul and Eclipse.
     $registryBase = "HKLM:\SOFTWARE"
     $azulJdks = "$registryBase\Azul Systems\Zulu"
-    $eclipseJdks = "$registryBase\Eclipse Adoptium\JDK"
+    $eclipseAdoptiumJdks = "$registryBase\Eclipse Adoptium\JDK"
+    $eclipseFoundationJdks = "$registryBase\Eclipse Foundation\JDK"
     $microsoftJdks = "$registryBase\Microsoft\JDK"
 
     # Collect all available JDK installations in the following format
@@ -83,8 +84,18 @@ if ("" -eq $JdkPath) {
     # Select the installs in the following format
     #
     # Eclipse | <First number segment in Current Version> | <Current Version> | <Path>
-    if (Test-Path -Path $eclipseJdks) {
-        foreach ($jdk in Get-ChildItem -Path $eclipseJdks) {
+    if (Test-Path -Path $eclipseAdoptiumJdks) {
+        foreach ($jdk in Get-ChildItem -Path $eclipseAdoptiumJdks) {
+            $jdkHKeyPath = $jdk.Name
+            $jdkFullVersion = $jdk.PSChildName
+            $jdkChoicePath = (Get-ItemProperty -Path "Registry::$jdkHKeyPath\hotspot\MSI").Path
+
+            [void]$jdkOptions.Rows.Add($choiceNumber, "Eclipse", $jdkFullVersion.split(".")[0], $jdkFullVersion, $jdkChoicePath)
+            $choiceNumber++
+        }
+    }
+    if (Test-Path -Path $eclipseFoundationJdks) {
+        foreach ($jdk in Get-ChildItem -Path $eclipseFoundationJdks) {
             $jdkHKeyPath = $jdk.Name
             $jdkFullVersion = $jdk.PSChildName
             $jdkChoicePath = (Get-ItemProperty -Path "Registry::$jdkHKeyPath\hotspot\MSI").Path
