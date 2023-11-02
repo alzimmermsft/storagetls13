@@ -5,6 +5,8 @@ import com.azure.core.http.HttpClient;
 import com.azure.core.http.ProxyOptions;
 import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
 import com.azure.core.http.okhttp.OkHttpAsyncHttpClientBuilder;
+import com.azure.core.http.policy.FixedDelayOptions;
+import com.azure.core.http.policy.RetryOptions;
 import com.azure.core.util.Configuration;
 import com.azure.core.util.CoreUtils;
 import com.azure.storage.blob.BlobContainerClient;
@@ -16,7 +18,6 @@ import okhttp3.ConnectionPool;
 import okhttp3.ConnectionSpec;
 import okhttp3.OkHttpClient;
 import okhttp3.TlsVersion;
-import reactor.netty.http.Http11SslContextSpec;
 import reactor.netty.resources.ConnectionProvider;
 
 import javax.net.ssl.SSLException;
@@ -24,6 +25,7 @@ import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
@@ -59,7 +61,9 @@ public class Tls13 {
         }
 
         BlobServiceClient serviceClient = new BlobServiceClientBuilder().httpClient(httpClient)
-            .connectionString(CONNECTION_STRING).buildClient();
+            .connectionString(CONNECTION_STRING)
+            .retryOptions(new RetryOptions(new FixedDelayOptions(3, Duration.ofSeconds(1))))
+            .buildClient();
 
         // The issue is related to threads being blocked when connections are closed.
         // To test this send a lot of requests to the server changing the container and blob often.
@@ -106,7 +110,7 @@ public class Tls13 {
             .tlsVersions(TlsVersion.TLS_1_3).build();
 
         // Disable connection pooling to ensure that each request uses a new connection.
-        ConnectionPool connectionPool = new ConnectionPool(0, 0, TimeUnit.SECONDS);
+        ConnectionPool connectionPool = new ConnectionPool(0, 1, TimeUnit.SECONDS);
 
         OkHttpAsyncHttpClientBuilder builder = new OkHttpAsyncHttpClientBuilder(
             new OkHttpClient.Builder().connectionSpecs(Collections.singletonList(connectionSpec))
