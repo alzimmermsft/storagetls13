@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 import com.azure.core.http.HttpClient;
+import com.azure.core.http.ProxyOptions;
 import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
 import com.azure.core.http.okhttp.OkHttpAsyncHttpClientBuilder;
 import com.azure.core.util.Configuration;
@@ -17,6 +18,7 @@ import reactor.netty.http.Http11SslContextSpec;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
+import java.net.InetSocketAddress;
 import java.util.Collections;
 
 public class Tls13 {
@@ -36,14 +38,18 @@ public class Tls13 {
             throw new RuntimeException("Invalid HTTP client provided. Valid values are 'netty' and 'okhttp'.");
         }
 
+        // Second argument is whether to enable Fiddler proxying.
+        // Valid values are "true" and "false", if the value isn't provided, "false" is used.
+        boolean enableFiddler = args.length >= 2 && Boolean.parseBoolean(args[1]);
+
         // Given the issue is related to TLS v1.3 and TLS v1.3 not requiring the server to send 'close_notify' configure
         // the HttpClient to only use TLS v1.3.
         // This will also give an early out if the server sending request to doesn't support TLS v1.3.
         HttpClient httpClient;
         if ("okhttp".equals(httpClientToUse)) {
-            httpClient = configureOkHttpClient();
+            httpClient = configureOkHttpClient(enableFiddler);
         } else {
-            httpClient = configureNettyHttpClient();
+            httpClient = configureNettyHttpClient(enableFiddler);
         }
 
         BlobServiceClient serviceClient = new BlobServiceClientBuilder()
@@ -72,26 +78,36 @@ public class Tls13 {
         }
     }
 
-    private static HttpClient configureNettyHttpClient() {
+    private static HttpClient configureNettyHttpClient(boolean enableFiddler) {
         // Configure Reactor Netty to only use TLS v1.3.
         Http11SslContextSpec http11SslContextSpec = Http11SslContextSpec.forClient()
             .configure(sslContextBuilder -> sslContextBuilder.protocols("TLSv1.3"));
 
-        return new NettyAsyncHttpClientBuilder(reactor.netty.http.client.HttpClient.create()
-            .secure(spec -> spec.sslContext(http11SslContextSpec)))
-            .build();
+        NettyAsyncHttpClientBuilder builder = new NettyAsyncHttpClientBuilder(reactor.netty.http.client.HttpClient.create()
+            .secure(spec -> spec.sslContext(http11SslContextSpec)));
+
+        if (enableFiddler) {
+            builder.proxy(new ProxyOptions(ProxyOptions.Type.HTTP, new InetSocketAddress("localhost", 8888)));
+        }
+
+        return builder.build();
     }
 
-    private static HttpClient configureOkHttpClient() {
+    private static HttpClient configureOkHttpClient(boolean enableFiddler) {
         // Configure OkHttp to only use TLS v1.3.
         ConnectionSpec connectionSpec = new ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
             .tlsVersions(TlsVersion.TLS_1_3)
             .build();
 
-        return new OkHttpAsyncHttpClientBuilder(new OkHttpClient.Builder()
+        OkHttpAsyncHttpClientBuilder builder = new OkHttpAsyncHttpClientBuilder(new OkHttpClient.Builder()
             .connectionSpecs(Collections.singletonList(connectionSpec))
-            .build())
-            .build();
+            .build());
+
+        if (enableFiddler) {
+            builder.proxy(new ProxyOptions(ProxyOptions.Type.HTTP, new InetSocketAddress("localhost", 8888)));
+        }
+
+        return builder.build();
     }
 
     private static void sendRequests(BlobServiceClient serviceClient) {
