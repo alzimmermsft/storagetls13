@@ -29,11 +29,13 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
-public class Tls13 {
+public class Tls13Track2 {
     private static final String CONNECTION_STRING = Configuration.getGlobalConfiguration()
         .get("STORAGE_CONNECTION_STRING");
 
     public static void main(String[] args) throws SSLException {
+        System.out.println("Using Track 2 implementation");
+
         // Print out the JVM version.
         // Throw an exception if it doesn't match what should be affected by the issue.
         printAndValidateJavaVersion();
